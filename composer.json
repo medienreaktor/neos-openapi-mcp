@@ -1,5 +1,5 @@
 {
-  "name": "neos/openapi-mcp",
+  "name": "medienreaktor/neos-openapi-mcp",
   "description": "Expose the operations of a neos/openapi as Model Context Protocol tools, using the official MCP PHP SDK.",
   "type": "library",
   "license": "MIT",

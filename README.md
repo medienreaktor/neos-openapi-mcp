@@ -1,4 +1,4 @@
-# neos/openapi-mcp
+# medienreaktor/neos-openapi-mcp
 
 Exposes the operations of a [neos/openapi](https://github.com/neos/openapi) `CompiledApi` as
 [Model Context Protocol](https://modelcontextprotocol.io) tools, using the official MCP PHP SDK (`mcp/sdk`).
