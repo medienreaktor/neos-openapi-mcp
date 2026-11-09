@@ -25,5 +25,10 @@
     "psr-4": {
       "Neos\\OpenApi\\Mcp\\Tests\\": "tests/"
     }
+  },
+  "extra": {
+    "branch-alias": {
+      "dev-main": "0.1.x-dev"
+    }
   }
 }
