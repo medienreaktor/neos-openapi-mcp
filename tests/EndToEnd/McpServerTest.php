@@ -59,7 +59,7 @@ final class McpServerTest extends TestCase
      * @param array<string, mixed> $params
      * @param array<string, string> $headers
      */
-    private function post(string $method, array $params = [], array $headers = [], McpServer|null $server = null): ResponseInterface
+    private function post(string $method, array $params = [], array $headers = [], McpServer|null $server = null, string $uri = 'http://localhost/mcp'): ResponseInterface
     {
         $params['_meta'] = [
             'io.modelcontextprotocol/protocolVersion' => self::VERSION,
@@ -76,7 +76,7 @@ final class McpServerTest extends TestCase
             $headers['Mcp-Name'] = $params['name'];
         }
         $body = (string) json_encode(['jsonrpc' => '2.0', 'id' => ++$this->id, 'method' => $method, 'params' => $params]);
-        return ($server ?? $this->server())->handle(new ServerRequest('POST', 'http://localhost/mcp', $headers, $body));
+        return ($server ?? $this->server())->handle(new ServerRequest('POST', $uri, $headers, $body));
     }
 
     /**
@@ -249,10 +249,16 @@ final class McpServerTest extends TestCase
 
     public function testTheOriginPolicyIsConfigurable(): void
     {
-        $server = $this->server([new DnsRebindingProtectionMiddleware(['neos.example.com'])]);
+        $server = $this->server([new DnsRebindingProtectionMiddleware(['neos.example.com'], allowedOrigins: ['https://admin.example.com'])]);
+        $uri = 'https://neos.example.com/mcp';
 
-        self::assertSame(200, $this->post('server/discover', [], ['Origin' => 'https://neos.example.com'], $server)->getStatusCode());
-        self::assertSame(403, $this->post('server/discover', [], ['Origin' => 'http://localhost'], $server)->getStatusCode());
+        self::assertSame(200, $this->post('server/discover', [], [], $server, $uri)->getStatusCode());
+        // same-origin is always allowed, other origins only if listed
+        self::assertSame(200, $this->post('server/discover', [], ['Origin' => 'https://neos.example.com'], $server, $uri)->getStatusCode());
+        self::assertSame(200, $this->post('server/discover', [], ['Origin' => 'https://admin.example.com'], $server, $uri)->getStatusCode());
+        self::assertSame(403, $this->post('server/discover', [], ['Origin' => 'https://evil.example'], $server, $uri)->getStatusCode());
+        // the host list replaces the localhost default
+        self::assertSame(403, $this->post('server/discover', [], [], $server)->getStatusCode());
     }
 
     public function testSeveralApisAreServedTogether(): void

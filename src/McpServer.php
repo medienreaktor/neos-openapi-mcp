@@ -39,10 +39,10 @@ use Psr\Log\NullLogger;
  * is given), registers those with a fresh SDK server, and lets the SDK's stateless HTTP transport answer.
  *
  * Origin validation: the transport middlewares default to the SDK's own — CORS (no cross-origin access) and DNS
- * rebinding protection, which rejects any `Origin` or `Host` that is not localhost. That is right for a local
- * server and wrong for a deployed one: pass your own list, e.g.
- * `[new CorsMiddleware(), new DnsRebindingProtectionMiddleware(['neos.example.com'])]`, or `[]` if a layer in front
- * validates `Origin` already.
+ * rebinding protection, which rejects any `Host` that is not localhost and any cross-origin `Origin`. That is right
+ * for a local server and wrong for a deployed one: pass your own list, e.g.
+ * `[new CorsMiddleware(), new DnsRebindingProtectionMiddleware(['neos.example.com'])]` (with `allowedOrigins:` for
+ * browser clients on another origin), or `[]` if a layer in front validates `Host` and `Origin` already.
  */
 final readonly class McpServer implements RequestHandlerInterface
 {
