@@ -123,9 +123,9 @@ and serves it through `StatelessHttpTransport`. Consequences:
   says so.
 
 **Origin validation** is the transport middlewares' job. The default (`transportMiddlewares: null`) is the SDK's:
-`CorsMiddleware` (no cross-origin access) and `DnsRebindingProtectionMiddleware`, which accepts only localhost in
-`Origin`/`Host`. A deployed server has to pass its own host list, or `[]` if something in front validates
-`Origin`.
+`CorsMiddleware` (no cross-origin access) and `DnsRebindingProtectionMiddleware`, which accepts only a localhost
+`Host` and same-origin requests. A deployed server has to pass its own host list (and, for browser clients on another
+origin, `allowedOrigins`), or `[]` if something in front validates `Host` and `Origin`.
 
 ## License
 
