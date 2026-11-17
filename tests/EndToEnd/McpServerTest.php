@@ -146,7 +146,7 @@ final class McpServerTest extends TestCase
         self::assertSame(['body'], $create['inputSchema']['required']);
         self::assertSame('#/$defs/NewArticle', $create['inputSchema']['properties']['body']['$ref']);
         self::assertSame('#/$defs/Article', $create['outputSchema']['$ref']);
-        self::assertSame(['readOnlyHint' => false, 'destructiveHint' => false, 'idempotentHint' => false, 'openWorldHint' => false], $create['annotations']);
+        self::assertSame(['readOnlyHint' => false, 'destructiveHint' => true, 'idempotentHint' => false, 'openWorldHint' => false], $create['annotations']);
     }
 
     public function testToolsCallAnswersWithStructuredContent(): void

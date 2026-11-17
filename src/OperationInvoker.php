@@ -126,6 +126,13 @@ final readonly class OperationInvoker
         $queryParams = [];
         $headers = [];
         $cookies = [];
+        $queryNames = [];
+        foreach ($tool->parameters as $parameter) {
+            if ($parameter->in === ParameterLocation::query) {
+                $queryNames[] = $parameter->name;
+            }
+        }
+        $forwarded = array_map('strtolower', $this->forwardedHeaders);
         foreach ($tool->parameters as $parameter) {
             $value = $arguments[$parameter->name] ?? null;
             if ($value === null) {
@@ -136,9 +143,12 @@ final readonly class OperationInvoker
             }
             match ($parameter->in) {
                 ParameterLocation::path => $pathVariables[$parameter->name] = self::simple($value, $parameter),
-                ParameterLocation::header => $headers[$parameter->name] = self::simple($value, $parameter),
+                ParameterLocation::header => in_array(strtolower($parameter->name), $forwarded, true)
+                    // the caller's credentials and origin come from the MCP request, never from the model
+                    ? throw new ToolCallException(sprintf('The header "%s" is taken from the MCP request, it cannot be an argument', $parameter->name))
+                    : $headers[$parameter->name] = self::simple($value, $parameter),
                 ParameterLocation::cookie => $cookies[$parameter->name] = self::simple($value, $parameter),
-                ParameterLocation::query => self::addQuery($parameter, $value, $queryPairs, $queryParams),
+                ParameterLocation::query => self::addQuery($parameter, $value, $queryPairs, $queryParams, $queryNames),
             };
         }
 
@@ -167,7 +177,12 @@ final readonly class OperationInvoker
             }
         }
         foreach ($headers as $name => $value) {
-            $request = $request->withHeader($name, $value);
+            try {
+                $request = $request->withHeader($name, $value);
+            } catch (\InvalidArgumentException) {
+                // e.g. a line break, which would start another header
+                throw new ToolCallException(sprintf('The argument "%s" is no valid header value', $name));
+            }
         }
         if ($cookies !== []) {
             $request = $request->withHeader('Cookie', implode('; ', array_map(
@@ -220,8 +235,9 @@ final readonly class OperationInvoker
     /**
      * @param list<array{0: string, 1: string}> $pairs the query string, in order
      * @param array<string, mixed> $params the same, as PHP would parse it
+     * @param list<string> $declaredNames the names of all of the operation's query parameters
      */
-    private static function addQuery(ToolParameter $parameter, mixed $value, array &$pairs, array &$params): void
+    private static function addQuery(ToolParameter $parameter, mixed $value, array &$pairs, array &$params, array $declaredNames): void
     {
         $name = $parameter->name;
         if (!is_array($value)) {
@@ -252,8 +268,12 @@ final readonly class OperationInvoker
             return;
         }
         if ($parameter->effectiveExplode()) {
-            // an exploded `form` object spreads its members into parameters of their own
+            // an exploded `form` object spreads its members into parameters of their own, which must not pass for
+            // another of the operation's parameters
             foreach ($scalars as $key => $member) {
+                if (in_array((string) $key, $declaredNames, true)) {
+                    throw new ToolCallException(sprintf('The member "%s" of the argument "%s" is a parameter of its own', $key, $name));
+                }
                 $pairs[] = [(string) $key, $params[(string) $key] = $member];
             }
             return;
@@ -280,6 +300,10 @@ final readonly class OperationInvoker
         foreach ($value as $key => $member) {
             if ($member === null) {
                 continue;
+            }
+            if (!$isList && (str_contains((string) $key, '[') || str_contains((string) $key, ']'))) {
+                // PHP would read `name[a][x]` as a nested key, not as the key `a][x`
+                throw new ToolCallException(sprintf('The key "%s" of the argument "%s" must not contain brackets', $key, $argumentName));
             }
             $wireName = $prefix . ($isList ? '[]' : '[' . $key . ']');
             if (is_array($member)) {

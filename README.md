@@ -72,8 +72,9 @@ only the components a schema reaches are bundled into its `$defs`.
 **Output schema**: the schema of the first 2xx response with a JSON body, bundled the same way; none if there is
 no such response.
 
-**Annotations** follow the HTTP method: GET/HEAD are read-only; GET/HEAD/PUT/DELETE are idempotent; only DELETE
-is destructive; nothing is open-world.
+**Annotations** follow the HTTP method: GET/HEAD are read-only; GET/HEAD/PUT/DELETE are idempotent; every other
+method is destructive, as none promises "only additive updates" (a POST may publish or flush, a PUT overwrites), so
+clients that confirm destructive tools ask for all of them; nothing is open-world.
 
 **Skipped** (listed in `ToolCatalog::$skipped`): operations whose request body is not JSON (e.g. multipart
 uploads) and operations taking the raw `ServerRequestInterface`, whose input the document does not describe.

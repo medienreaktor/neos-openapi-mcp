@@ -6,6 +6,7 @@ namespace Neos\OpenApi\Mcp\Tests\Unit;
 
 use GuzzleHttp\Psr7\HttpFactory;
 use GuzzleHttp\Psr7\ServerRequest;
+use Mcp\Exception\ToolCallException;
 use Mcp\Schema\Content\TextContent;
 use Mcp\Schema\Result\CallToolResult;
 use Neos\OpenApi\Mcp\OperationInvoker;
@@ -341,5 +342,61 @@ final class OperationInvokerTest extends TestCase
 
         self::assertTrue($result->isError);
         self::assertSame('The argument "tag" has a array where a single value is expected', self::text($result));
+    }
+
+    public function testHeadersTakenFromTheMcpRequestCannotBeArguments(): void
+    {
+        $tool = $this->toolWith(new ToolParameter('Authorization', ParameterLocation::header, false));
+
+        $this->expectException(ToolCallException::class);
+        $this->expectExceptionMessage('The header "Authorization" is taken from the MCP request');
+        $this->invoker()->buildRequest($tool, ['Authorization' => 'Bearer someone-else'], $this->mcpRequest);
+    }
+
+    public function testHeaderValuesWithALineBreakAreAToolError(): void
+    {
+        $tool = $this->toolWith(new ToolParameter('X-Note', ParameterLocation::header, false));
+
+        $this->expectException(ToolCallException::class);
+        $this->invoker()->buildRequest($tool, ['X-Note' => "a\r\nX-Injected: b"], $this->mcpRequest);
+    }
+
+    public function testMembersOfAnExplodedObjectCannotPassForAnotherParameter(): void
+    {
+        $tool = $this->toolWith(
+            new ToolParameter('workspaceName', ParameterLocation::query, false),
+            new ToolParameter('filter', ParameterLocation::query, false),
+        );
+
+        $this->expectException(ToolCallException::class);
+        $this->expectExceptionMessage('The member "workspaceName" of the argument "filter" is a parameter of its own');
+        $this->invoker()->buildRequest($tool, ['workspaceName' => 'user-alice', 'filter' => ['workspaceName' => 'live']], $this->mcpRequest);
+    }
+
+    public function testKeysOfDeepObjectsCannotContainBrackets(): void
+    {
+        $tool = $this->toolWith(new ToolParameter('arguments', ParameterLocation::query, false, ParameterStyle::deepObject, true));
+
+        $this->expectException(ToolCallException::class);
+        $this->expectExceptionMessage('The key "a][x" of the argument "arguments" must not contain brackets');
+        $this->invoker()->buildRequest($tool, ['arguments' => ['a][x' => 'v']], $this->mcpRequest);
+    }
+
+    private function toolWith(ToolParameter ...$parameters): OperationTool
+    {
+        return new OperationTool(
+            name: 'search',
+            title: null,
+            description: 'GET /search',
+            inputSchema: ['type' => 'object'],
+            outputSchema: null,
+            annotations: OperationTool::annotationsFor(HttpMethod::GET),
+            operationId: 'search',
+            security: null,
+            method: HttpMethod::GET,
+            path: RelativePath::fromString('/search'),
+            parameters: array_values($parameters),
+            body: null,
+        );
     }
 }

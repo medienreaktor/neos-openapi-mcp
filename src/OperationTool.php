@@ -70,14 +70,16 @@ final readonly class OperationTool
 
     /**
      * The annotations MCP defines, derived from the HTTP method's own semantics (RFC 9110 §9.2): GET and HEAD are
-     * safe, so read-only; PUT and DELETE are idempotent; only DELETE is destructive. An API's operations act on its
-     * own data and nothing beyond it, so none of them is "open world".
+     * safe, so read-only; PUT and DELETE are idempotent. Every other operation counts as destructive: MCP calls a tool
+     * non-destructive only if it "performs only additive updates", which no method promises (a POST may publish,
+     * discard or flush, a PUT or PATCH overwrites), and clients that ask before destructive tools must not skip those.
+     * An API's operations act on its own data and nothing beyond it, so none of them is "open world".
      */
     public static function annotationsFor(HttpMethod $method): ToolAnnotations
     {
         return new ToolAnnotations(
             readOnlyHint: in_array($method, [HttpMethod::GET, HttpMethod::HEAD], true),
-            destructiveHint: $method === HttpMethod::DELETE,
+            destructiveHint: !in_array($method, [HttpMethod::GET, HttpMethod::HEAD], true),
             idempotentHint: in_array($method, [HttpMethod::GET, HttpMethod::HEAD, HttpMethod::PUT, HttpMethod::DELETE], true),
             openWorldHint: false,
         );

@@ -83,9 +83,10 @@ final class ToolCatalogTest extends TestCase
     public static function annotations(): iterable
     {
         yield 'GET' => ['getArticle', true, false, true];
-        yield 'POST' => ['createArticle', false, false, false];
-        yield 'PATCH' => ['updateArticle', false, false, false];
-        yield 'PUT' => ['tagArticle', false, false, true];
+        // no method promises "only additive updates"
+        yield 'POST' => ['createArticle', false, true, false];
+        yield 'PATCH' => ['updateArticle', false, true, false];
+        yield 'PUT' => ['tagArticle', false, true, true];
         yield 'DELETE' => ['deleteArticle', false, true, true];
     }
 
