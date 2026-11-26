@@ -5,16 +5,21 @@ declare(strict_types=1);
 namespace Neos\OpenApi\Mcp;
 
 use Mcp\Schema\Enum\ProtocolVersion;
+use Mcp\Schema\Extension\Apps\McpApps;
+use Mcp\Schema\Extension\Apps\UiToolMeta;
 use Mcp\Schema\ServerCapabilities;
 use Mcp\Schema\Tool;
 use Mcp\Server\Server;
 use Mcp\Server\Handler\ToolHandlerInterface;
 use Mcp\Server\Builder;
+use Mcp\Server\Capability\Registry\Loader\ExplicitElementLoader;
 use Mcp\Server\Transport\StatelessHttpTransport;
 use Mcp\Server\Transport\StreamableHttpTransport;
 use Neos\OpenApi\Http\AuthContextProvider;
 use Neos\OpenApi\Mcp\Exception\ToolNameCollisionException;
+use Neos\OpenApi\Mcp\Internal\CustomToolHandler;
 use Neos\OpenApi\Mcp\Internal\OperationToolHandler;
+use Neos\OpenApi\Mcp\Internal\UiResourceHandler;
 use Neos\OpenApi\Mcp\Internal\VisibleToolLoader;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -41,6 +46,9 @@ use Psr\Log\NullLogger;
  * Per request, it decides which tools the caller may see ({@see ToolVisibility}, if an {@see AuthContextProvider}
  * is given), registers those with a fresh SDK server, and lets the SDK's HTTP transport answer.
  *
+ * Next to the operations it can serve {@see CustomTool}s and the views of MCP Apps ({@see UiResource}). With at least
+ * one UI resource, it advertises `resources` and the extension `io.modelcontextprotocol/ui`; without, tools only.
+ *
  * Origin validation: the transport middlewares default to the SDK's own — CORS (no cross-origin access) and DNS
  * rebinding protection, which rejects any `Host` that is not localhost and any cross-origin `Origin`. That is right
  * for a local server and wrong for a deployed one: pass your own list, e.g.
@@ -55,6 +63,21 @@ final readonly class McpServer implements RequestHandlerInterface
     private array $tools;
 
     /**
+     * @var array<string, array{tool: OperationTool, invoker: OperationInvoker}> by tool name
+     */
+    private array $operations;
+
+    /**
+     * @var list<CustomTool>
+     */
+    private array $customTools;
+
+    /**
+     * @var list<UiResource>
+     */
+    private array $uiResources;
+
+    /**
      * @param list<ExposedApi> $apis
      * @param list<MiddlewareInterface> $operationMiddlewares wrapped around every operation call, the first one
      *                                                        outermost — see {@see OperationInvoker}
@@ -66,7 +89,11 @@ final readonly class McpServer implements RequestHandlerInterface
      * @param list<string> $forwardedHeaders headers of the MCP request that operation calls carry over
      * @param bool $handshakeEra whether clients of the 2024/2025 revisions are served too (`initialize`, without a
      *                           session); `false` serves 2026-07-28 only
-     * @throws ToolNameCollisionException if two of the APIs have a tool of the same name
+     * @param list<CustomTool> $customTools tools next to the operations, see {@see CustomTool}
+     * @param list<UiResource> $uiResources the views of MCP Apps the tools link to
+     * @throws ToolNameCollisionException if two tools (of the APIs or custom ones) have the same name
+     * @throws \InvalidArgumentException if a custom tool names an operation no API has, links a UI resource that is
+     *                                   not given, or two UI resources share a URI
      */
     public function __construct(
         private ServerInfo $serverInfo,
@@ -80,6 +107,8 @@ final readonly class McpServer implements RequestHandlerInterface
         private LoggerInterface $logger = new NullLogger(),
         array $forwardedHeaders = OperationInvoker::DEFAULT_FORWARDED_HEADERS,
         private bool $handshakeEra = true,
+        array $customTools = [],
+        array $uiResources = [],
     ) {
         $all = ToolCatalog::empty();
         $tools = [];
@@ -99,6 +128,51 @@ final readonly class McpServer implements RequestHandlerInterface
             }
         }
         $this->tools = $tools;
+        $operations = [];
+        foreach ($tools as $entry) {
+            $operations[$entry['tool']->name] = $entry;
+        }
+        $this->operations = $operations;
+
+        $uris = [];
+        foreach ($uiResources as $resource) {
+            if (isset($uris[$resource->uri])) {
+                throw new \InvalidArgumentException(sprintf('There are two UI resources with the URI %s', $resource->uri), 1795000103);
+            }
+            $uris[$resource->uri] = true;
+        }
+        $names = array_fill_keys(array_keys($operations), true);
+        foreach ($customTools as $customTool) {
+            $definition = $customTool->definition();
+            if (isset($names[$definition->name])) {
+                throw new ToolNameCollisionException(sprintf('There are two tools named "%s"; a custom tool must not reuse the name of another tool', $definition->name), 1795000104);
+            }
+            $names[$definition->name] = true;
+            foreach ($customTool->operations() as $operation) {
+                if (!isset($operations[$operation])) {
+                    throw new \InvalidArgumentException(sprintf('The custom tool "%s" uses the operation "%s", which none of the APIs has', $definition->name, $operation), 1795000105);
+                }
+            }
+            $uri = self::linkedUiResource($definition);
+            if ($uri !== null && !isset($uris[$uri])) {
+                throw new \InvalidArgumentException(sprintf('The custom tool "%s" links the UI resource %s, which is not given', $definition->name, $uri), 1795000106);
+            }
+        }
+        $this->customTools = $customTools;
+        $this->uiResources = $uiResources;
+    }
+
+    /**
+     * The `ui://` URI a tool definition links in `_meta.ui.resourceUri`, if any.
+     */
+    private static function linkedUiResource(Tool $definition): string|null
+    {
+        $ui = $definition->meta['ui'] ?? null;
+        return match (true) {
+            $ui instanceof UiToolMeta => $ui->resourceUri,
+            is_array($ui) && is_string($ui['resourceUri'] ?? null) => $ui['resourceUri'],
+            default => null,
+        };
     }
 
     /**
@@ -155,14 +229,15 @@ final readonly class McpServer implements RequestHandlerInterface
     private function builderFor(ServerRequestInterface $request): Builder
     {
         $info = $this->serverInfo;
-        return Server::builder()
+        $offersApps = $this->uiResources !== [];
+        $builder = Server::builder()
             ->setServerInfo($info->name, $info->version, $info->description, websiteUrl: $info->websiteUrl, title: $info->title)
             ->setInstructions($info->instructions)
-            // only tools: auto-detection would advertise resources, prompts, completions and logging too
+            // only what is served: auto-detection would advertise resources, prompts, completions and logging too
             ->setCapabilities(new ServerCapabilities(
                 tools: true,
                 toolsListChanged: false,
-                resources: false,
+                resources: $offersApps,
                 resourcesSubscribe: false,
                 resourcesListChanged: false,
                 prompts: false,
@@ -173,6 +248,15 @@ final readonly class McpServer implements RequestHandlerInterface
             ->setLogger($this->logger)
             ->addLoader(new VisibleToolLoader(fn(): array => $this->registrations($request)))
             ->setModernVersions([ProtocolVersion::V2026_07_28]);
+        if ($offersApps) {
+            $builder
+                ->enableExtension(new McpApps())
+                ->addLoader(new ExplicitElementLoader(resources: array_map(
+                    static fn(UiResource $resource): array => ['definition' => $resource->definition(), 'handler' => new UiResourceHandler($resource)],
+                    $this->uiResources,
+                )));
+        }
+        return $builder;
     }
 
     /**
@@ -189,6 +273,20 @@ final readonly class McpServer implements RequestHandlerInterface
             $registrations[] = [
                 'definition' => $entry['tool']->toMcpTool(),
                 'handler' => new OperationToolHandler($entry['invoker'], $entry['tool'], $request),
+            ];
+        }
+        foreach ($this->customTools as $customTool) {
+            $operations = [];
+            foreach ($customTool->operations() as $operation) {
+                if (!$visible->has($operation)) {
+                    // the caller could not use the tool anyway
+                    continue 2;
+                }
+                $operations[$operation] = $this->operations[$operation];
+            }
+            $registrations[] = [
+                'definition' => $customTool->definition(),
+                'handler' => new CustomToolHandler($customTool, new OperationCaller($operations, $request)),
             ];
         }
         return $registrations;

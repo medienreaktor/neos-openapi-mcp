@@ -54,6 +54,9 @@ $response = $server->handle($serverRequest); // McpServer is a PSR-15 RequestHan
 | `ToolVisibility`           | `isVisible(OperationTool, ServerRequestInterface)` and `visibleTools(ToolCatalog, ServerRequestInterface)`, asking an `AuthContextProvider`.                                                                                                                                           |
 | `McpServer`                | The entry point: per request, registers the caller's visible tools with the SDK and answers through its Streamable HTTP transport, in either protocol era.                                                                                                                                    |
 | `ExposedApi`, `ServerInfo` | Configuration value objects for `McpServer`.                                                                                                                                                                                                                                           |
+| `CustomTool`               | Interface for a tool next to the operations: `definition()` (the SDK's `Tool`, with `_meta.ui` to open a view), `operations()` it uses, `call(array $arguments, OperationCaller)`.                                                                                                      |
+| `OperationCaller`          | `call(string $operation, array $arguments): CallToolResult` — calls one of the custom tool's declared operations as the caller.                                                                                                                                                       |
+| `UiResource`               | The HTML view of an MCP App: a `ui://` URI, a name, the HTML (a closure, read lazily) and the SDK's `UiResourceContentMeta` (CSP, permissions, domain, border).                                                                                                                         |
 
 Everything under `Schema\` and `Internal\` except `InputSchema`/`OutputSchema` is internal.
 
@@ -106,6 +109,29 @@ Responses become results:
 Exceptions thrown by an operation are not caught by the invoker. Map the ones you expect to responses in an
 operation middleware; whatever escapes is answered by the SDK as a JSON-RPC internal error (logged, message not
 disclosed).
+
+## Custom tools and MCP Apps
+
+`McpServer` takes `customTools:` and `uiResources:` next to the APIs. The library ships neither: they are the
+application's.
+
+A **custom tool** (`CustomTool`) is a tool that is not an operation. It works through the operations it names in
+`operations()`, which an `OperationCaller` calls for it with the caller's credentials, so it can do nothing the caller
+could not do with the operation tools. It is listed only to callers who may see all of those operations, and the
+caller refuses any operation it did not declare.
+
+A **UI resource** (`UiResource`) is the view of an [MCP App](https://modelcontextprotocol.io/extensions/apps/overview):
+an HTML document served as a `ui://` resource with the MIME type `text/html;profile=mcp-app`. A tool opens it by
+linking its URI in `_meta.ui` (`new Tool(…, meta: ['ui' => new UiToolMeta('ui://…')])`). With at least one UI resource,
+the server advertises `resources` and the extension `io.modelcontextprotocol/ui`, lists the views in `resources/list`
+and answers `resources/read` with the HTML and its `_meta.ui` (CSP, permissions, …). Without any, it advertises tools
+only.
+
+The server serves the views to any client and doesn't check whether the client supports MCP Apps. A host without it
+ignores `_meta.ui` and shows only the tool's result, so a custom tool's result should make sense as text as well.
+
+When the server is built, it throws if a custom tool reuses a tool name (`ToolNameCollisionException`), names an
+operation none of the APIs has, links a UI resource that is not given, or if two UI resources share a URI.
 
 ## Protocol and transport
 
