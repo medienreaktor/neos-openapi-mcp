@@ -130,8 +130,14 @@ only.
 The server serves the views to any client and doesn't check whether the client supports MCP Apps. A host without it
 ignores `_meta.ui` and shows only the tool's result, so a custom tool's result should make sense as text as well.
 
+**Operation tools** get a `_meta` of their own through `operationToolMeta:` (tool name → `_meta`). Typically an
+operation only the views call, hidden from the model: `['createThing' => ['ui' => new UiToolMeta(visibility:
+[ToolVisibility::App])]]`. The visibility is a hint to the host, not access control: the server can't tell a call of
+the view from one of the model, so the operation's own security still decides what the caller may do.
+
 When the server is built, it throws if a custom tool reuses a tool name (`ToolNameCollisionException`), names an
-operation none of the APIs has, links a UI resource that is not given, or if two UI resources share a URI.
+operation none of the APIs has, a tool links a UI resource that is not given, two UI resources share a URI, or there
+is `_meta` for an operation none of the APIs has.
 
 ## Protocol and transport
 

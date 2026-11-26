@@ -105,8 +105,10 @@ final readonly class OperationTool
 
     /**
      * The tool definition as the MCP SDK takes it.
+     *
+     * @param array<string, mixed>|null $meta the definition's `_meta`, e.g. `_meta.ui` of MCP Apps
      */
-    public function toMcpTool(): Tool
+    public function toMcpTool(array|null $meta = null): Tool
     {
         return new Tool(
             name: $this->name,
@@ -116,6 +118,7 @@ final readonly class OperationTool
             annotations: $this->annotations,
             // the SDK types this as an array, but an empty schema has to stay an object to encode as `{}`
             outputSchema: $this->outputSchema instanceof \stdClass ? [] : $this->outputSchema,
+            meta: $meta,
         );
     }
 }

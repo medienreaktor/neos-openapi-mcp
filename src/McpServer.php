@@ -78,6 +78,11 @@ final readonly class McpServer implements RequestHandlerInterface
     private array $uiResources;
 
     /**
+     * @var array<string, array<string, mixed>> by tool name
+     */
+    private array $operationToolMeta;
+
+    /**
      * @param list<ExposedApi> $apis
      * @param list<MiddlewareInterface> $operationMiddlewares wrapped around every operation call, the first one
      *                                                        outermost — see {@see OperationInvoker}
@@ -91,9 +96,13 @@ final readonly class McpServer implements RequestHandlerInterface
      *                           session); `false` serves 2026-07-28 only
      * @param list<CustomTool> $customTools tools next to the operations, see {@see CustomTool}
      * @param list<UiResource> $uiResources the views of MCP Apps the tools link to
+     * @param array<string, array<string, mixed>> $operationToolMeta the `_meta` of operation tools, by tool name: e.g.
+     *                                                             `['ui' => new UiToolMeta(visibility: [ToolVisibility::App])]`
+     *                                                             for an operation only the views of MCP Apps call
      * @throws ToolNameCollisionException if two tools (of the APIs or custom ones) have the same name
-     * @throws \InvalidArgumentException if a custom tool names an operation no API has, links a UI resource that is
-     *                                   not given, or two UI resources share a URI
+     * @throws \InvalidArgumentException if a custom tool names an operation no API has, a tool links a UI resource that
+     *                                   is not given, two UI resources share a URI, or there is `_meta` for an
+     *                                   operation no API has
      */
     public function __construct(
         private ServerInfo $serverInfo,
@@ -109,6 +118,7 @@ final readonly class McpServer implements RequestHandlerInterface
         private bool $handshakeEra = true,
         array $customTools = [],
         array $uiResources = [],
+        array $operationToolMeta = [],
     ) {
         $all = ToolCatalog::empty();
         $tools = [];
@@ -158,8 +168,18 @@ final readonly class McpServer implements RequestHandlerInterface
                 throw new \InvalidArgumentException(sprintf('The custom tool "%s" links the UI resource %s, which is not given', $definition->name, $uri), 1795000106);
             }
         }
+        foreach ($operationToolMeta as $name => $meta) {
+            if (!isset($operations[$name])) {
+                throw new \InvalidArgumentException(sprintf('There is _meta for the operation tool "%s", which none of the APIs has', $name), 1795000107);
+            }
+            $uri = self::linkedUiResource($operations[$name]['tool']->toMcpTool($meta));
+            if ($uri !== null && !isset($uris[$uri])) {
+                throw new \InvalidArgumentException(sprintf('The operation tool "%s" links the UI resource %s, which is not given', $name, $uri), 1795000108);
+            }
+        }
         $this->customTools = $customTools;
         $this->uiResources = $uiResources;
+        $this->operationToolMeta = $operationToolMeta;
     }
 
     /**
@@ -271,7 +291,7 @@ final readonly class McpServer implements RequestHandlerInterface
                 continue;
             }
             $registrations[] = [
-                'definition' => $entry['tool']->toMcpTool(),
+                'definition' => $entry['tool']->toMcpTool($this->operationToolMeta[$entry['tool']->name] ?? null),
                 'handler' => new OperationToolHandler($entry['invoker'], $entry['tool'], $request),
             ];
         }

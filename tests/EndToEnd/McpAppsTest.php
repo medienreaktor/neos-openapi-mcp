@@ -6,8 +6,10 @@ namespace Neos\OpenApi\Mcp\Tests\EndToEnd;
 
 use GuzzleHttp\Psr7\HttpFactory;
 use GuzzleHttp\Psr7\ServerRequest;
+use Mcp\Schema\Extension\Apps\ToolVisibility;
 use Mcp\Schema\Extension\Apps\UiResourceContentMeta;
 use Mcp\Schema\Extension\Apps\UiResourceCsp;
+use Mcp\Schema\Extension\Apps\UiToolMeta;
 use Neos\OpenApi\Mcp\Exception\ToolNameCollisionException;
 use Neos\OpenApi\Mcp\ExposedApi;
 use Neos\OpenApi\Mcp\McpServer;
@@ -42,8 +44,9 @@ final class McpAppsTest extends TestCase
     /**
      * @param list<\Neos\OpenApi\Mcp\CustomTool>|null $customTools
      * @param list<UiResource>|null $uiResources
+     * @param array<string, array<string, mixed>> $operationToolMeta
      */
-    private function server(array|null $customTools = null, array|null $uiResources = null): McpServer
+    private function server(array|null $customTools = null, array|null $uiResources = null, array $operationToolMeta = []): McpServer
     {
         $compiled = TestApis::articles();
         $factory = new HttpFactory();
@@ -57,6 +60,7 @@ final class McpAppsTest extends TestCase
             new TestAuthContextProvider(),
             customTools: $customTools ?? [new ArticleViewTool(), new ArticleViewTool('createFromView', ['createArticle'], null)],
             uiResources: $uiResources ?? [$this->view()],
+            operationToolMeta: $operationToolMeta,
         );
     }
 
@@ -255,6 +259,30 @@ final class McpAppsTest extends TestCase
         $this->expectExceptionCode(1795000103);
 
         $this->server(uiResources: [$this->view(), $this->view()]);
+    }
+
+    public function testAnOperationToolCarriesTheMetaGivenForIt(): void
+    {
+        $server = $this->server(operationToolMeta: ['getArticle' => ['ui' => new UiToolMeta(visibility: [ToolVisibility::App])]]);
+
+        $tools = array_column(self::rpcResult($this->post('tools/list', [], [], $server))['tools'], null, 'name');
+
+        self::assertSame(['ui' => ['visibility' => ['app']]], $tools['getArticle']['_meta']);
+        self::assertArrayNotHasKey('_meta', $tools['listArticles']);
+    }
+
+    public function testMetaNeedsAnExistingOperation(): void
+    {
+        $this->expectExceptionCode(1795000107);
+
+        $this->server(operationToolMeta: ['showArticle' => ['ui' => new UiToolMeta(visibility: [ToolVisibility::App])]]);
+    }
+
+    public function testMetaMustLinkAGivenView(): void
+    {
+        $this->expectExceptionCode(1795000108);
+
+        $this->server(operationToolMeta: ['getArticle' => ['ui' => new UiToolMeta('ui://articles/other')]]);
     }
 
     public function testAViewNeedsAUiUri(): void
