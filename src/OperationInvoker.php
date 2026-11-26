@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Neos\OpenApi\Mcp;
 
-use Mcp\Exception\ToolCallException;
+use Mcp\Server\Exception\ToolCallException;
 use Mcp\Schema\Content\TextContent;
 use Mcp\Schema\Result\CallToolResult;
 use Neos\OpenApi\Http\RequestHandler;
@@ -134,7 +134,8 @@ final readonly class OperationInvoker
         }
         $forwarded = array_map('strtolower', $this->forwardedHeaders);
         foreach ($tool->parameters as $parameter) {
-            $value = $arguments[$parameter->name] ?? null;
+            // the SDK hands nested JSON objects over as stdClass; a parameter's style works on keys and members
+            $value = self::toArrays($arguments[$parameter->name] ?? null);
             if ($value === null) {
                 if ($parameter->in === ParameterLocation::path) {
                     throw new ToolCallException(sprintf('The argument "%s" is required', $parameter->name));
@@ -194,7 +195,8 @@ final readonly class OperationInvoker
 
         $bodyValue = $arguments[ToolRequestBody::ARGUMENT_NAME] ?? null;
         if ($tool->body !== null && $bodyValue !== null) {
-            // decoded arguments cannot tell `{}` from `[]`; the body's schema can
+            // the SDK keeps `{}` a stdClass, so the body is encoded as sent; a caller passing plain arrays cannot
+            // tell `{}` from `[]`, but the body's schema can
             $bodyValue = $bodyValue === [] && $tool->body->isObject ? new \stdClass() : $bodyValue;
             try {
                 $encoded = json_encode($bodyValue, JsonValue::ENCODING_FLAGS);
@@ -207,6 +209,17 @@ final readonly class OperationInvoker
         }
 
         return new OperationRequest($request, $tool->operationId, $pathVariables);
+    }
+
+    /**
+     * The value with every JSON object, at any depth, as an associative array.
+     */
+    private static function toArrays(mixed $value): mixed
+    {
+        if ($value instanceof \stdClass) {
+            $value = get_object_vars($value);
+        }
+        return is_array($value) ? array_map(self::toArrays(...), $value) : $value;
     }
 
     /**

@@ -6,7 +6,7 @@ namespace Neos\OpenApi\Mcp\Tests\Unit;
 
 use GuzzleHttp\Psr7\HttpFactory;
 use GuzzleHttp\Psr7\ServerRequest;
-use Mcp\Exception\ToolCallException;
+use Mcp\Server\Exception\ToolCallException;
 use Mcp\Schema\Content\TextContent;
 use Mcp\Schema\Result\CallToolResult;
 use Neos\OpenApi\Mcp\OperationInvoker;

@@ -7,7 +7,7 @@ namespace Neos\OpenApi\Mcp;
 use Mcp\Schema\Enum\ProtocolVersion;
 use Mcp\Schema\ServerCapabilities;
 use Mcp\Schema\Tool;
-use Mcp\Server;
+use Mcp\Server\Server;
 use Mcp\Server\Handler\ToolHandlerInterface;
 use Mcp\Server\Stateless\StatelessProtocol;
 use Mcp\Server\Transport\StatelessHttpTransport;

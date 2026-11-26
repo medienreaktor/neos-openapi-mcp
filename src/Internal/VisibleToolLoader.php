@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace Neos\OpenApi\Mcp\Internal;
 
 use Closure;
-use Mcp\Capability\Registry\Loader\ExplicitElementLoader;
-use Mcp\Capability\Registry\Loader\LoaderInterface;
-use Mcp\Capability\RegistryInterface;
+use Mcp\Server\Capability\Registry\Loader\ExplicitElementLoader;
+use Mcp\Server\Capability\Registry\Loader\LoaderInterface;
+use Mcp\Server\Capability\RegistryInterface;
 use Mcp\Schema\Tool;
 use Mcp\Server\Handler\ToolHandlerInterface;
 
