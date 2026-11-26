@@ -39,7 +39,7 @@ final class McpServerTest extends TestCase
     /**
      * @param list<\Psr\Http\Server\MiddlewareInterface>|null $transportMiddlewares
      */
-    private function server(array|null $transportMiddlewares = null): McpServer
+    private function server(array|null $transportMiddlewares = null, bool $handshakeEra = true): McpServer
     {
         $compiled = TestApis::articles();
         $factory = new HttpFactory();
@@ -52,7 +52,25 @@ final class McpServerTest extends TestCase
             [new AccessDeniedMiddleware()],
             new TestAuthContextProvider(),
             $transportMiddlewares,
+            handshakeEra: $handshakeEra,
         );
+    }
+
+    /**
+     * A request as a client of the handshake era sends it: no `_meta`, the revision in the header only.
+     *
+     * @param array<string, mixed> $params
+     * @param array<string, string> $headers
+     */
+    private function postHandshakeEra(string $method, array $params = [], array $headers = [], string $version = '2025-06-18', McpServer|null $server = null): ResponseInterface
+    {
+        $headers += [
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json, text/event-stream',
+            'MCP-Protocol-Version' => $version,
+        ];
+        $body = (string) json_encode(['jsonrpc' => '2.0', 'id' => ++$this->id, 'method' => $method, 'params' => $params === [] ? new \stdClass() : $params]);
+        return ($server ?? $this->server())->handle(new ServerRequest('POST', 'http://localhost/mcp', $headers, $body));
     }
 
     /**
@@ -200,7 +218,7 @@ final class McpServerTest extends TestCase
         self::assertSame([], $this->api->lastArguments);
     }
 
-    public function testTheInitializeHandshakeIsNotServed(): void
+    public function testTheInitializeHandshakeIsNotServedWithoutTheHandshakeEra(): void
     {
         $body = (string) json_encode([
             'jsonrpc' => '2.0',
@@ -209,14 +227,14 @@ final class McpServerTest extends TestCase
             'params' => ['protocolVersion' => '2025-11-25', 'capabilities' => new \stdClass(), 'clientInfo' => ['name' => 'old', 'version' => '1']],
         ]);
 
-        $response = $this->server()->handle(new ServerRequest('POST', 'http://localhost/mcp', ['Content-Type' => 'application/json'], $body));
+        $response = $this->server(handshakeEra: false)->handle(new ServerRequest('POST', 'http://localhost/mcp', ['Content-Type' => 'application/json'], $body));
 
         self::assertSame(400, $response->getStatusCode());
         self::assertArrayHasKey('error', self::json($response));
         self::assertFalse($response->hasHeader('Mcp-Session-Id'));
     }
 
-    public function testAnOlderRevisionIsToldWhichOneIsSupported(): void
+    public function testAnOlderRevisionIsToldWhichOneIsSupportedWithoutTheHandshakeEra(): void
     {
         $body = (string) json_encode([
             'jsonrpc' => '2.0',
@@ -225,7 +243,7 @@ final class McpServerTest extends TestCase
             'params' => ['_meta' => ['io.modelcontextprotocol/protocolVersion' => '2025-11-25', 'io.modelcontextprotocol/clientCapabilities' => new \stdClass()]],
         ]);
 
-        $response = $this->server()->handle(new ServerRequest('POST', 'http://localhost/mcp', [
+        $response = $this->server(handshakeEra: false)->handle(new ServerRequest('POST', 'http://localhost/mcp', [
             'Content-Type' => 'application/json',
             'MCP-Protocol-Version' => '2025-11-25',
             'Mcp-Method' => 'tools/list',
@@ -233,6 +251,71 @@ final class McpServerTest extends TestCase
 
         self::assertSame(400, $response->getStatusCode());
         self::assertStringContainsString(self::VERSION, (string) $response->getBody());
+    }
+
+    public function testInitializeIsAnsweredWithoutASession(): void
+    {
+        $response = $this->postHandshakeEra('initialize', [
+            'protocolVersion' => '2025-11-25',
+            'capabilities' => new \stdClass(),
+            'clientInfo' => ['name' => 'old', 'version' => '1'],
+        ], version: '2025-11-25');
+
+        $result = self::rpcResult($response);
+        self::assertSame('2025-11-25', $result['protocolVersion']);
+        self::assertSame('neos', $result['serverInfo']['name']);
+        self::assertSame('Manage the articles of the blog.', $result['instructions']);
+        self::assertSame(['tools'], array_keys($result['capabilities']));
+        self::assertFalse($response->hasHeader('Mcp-Session-Id'));
+    }
+
+    public function testTheInitializedNotificationIsAccepted(): void
+    {
+        $response = $this->server()->handle(new ServerRequest('POST', 'http://localhost/mcp', [
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json, text/event-stream',
+            'MCP-Protocol-Version' => '2025-06-18',
+        ], '{"jsonrpc":"2.0","method":"notifications/initialized"}'));
+
+        self::assertSame(202, $response->getStatusCode());
+    }
+
+    public function testTheHandshakeEraListsTheToolsTheCallerMaySee(): void
+    {
+        $result = self::rpcResult($this->postHandshakeEra('tools/list', [], ['Authorization' => 'Bearer alice']));
+
+        self::assertSame($this->listedTools(['Authorization' => 'Bearer alice']), array_column($result['tools'], 'name'));
+        self::assertNotContains('flushCaches', array_column($result['tools'], 'name'));
+    }
+
+    public function testTheHandshakeEraCallsTools(): void
+    {
+        $result = self::rpcResult($this->postHandshakeEra('tools/call', [
+            'name' => 'listArticles',
+            'arguments' => ['limit' => 1, 'filter' => ['author' => 'Ada']],
+        ]));
+
+        self::assertFalse($result['isError']);
+        self::assertSame([['id' => 'article-1', 'title' => 'Article 1', 'author' => ['name' => 'Ada'], 'published' => false]], $result['structuredContent']);
+        self::assertSame('Ada', $this->api->lastArguments['filter']->author->value);
+    }
+
+    public function testTheHandshakeEraCarriesTheCallersCredentials(): void
+    {
+        $result = self::rpcResult($this->postHandshakeEra(
+            'tools/call',
+            ['name' => 'createArticle', 'arguments' => ['body' => ['title' => 'Hello']]],
+            ['Authorization' => 'Bearer alice'],
+        ));
+
+        self::assertSame(['id' => 'new', 'title' => 'Hello', 'author' => ['name' => 'alice'], 'published' => false], $result['structuredContent']);
+    }
+
+    public function testNoSessionCanBeEnded(): void
+    {
+        $response = $this->server()->handle(new ServerRequest('DELETE', 'http://localhost/mcp', ['Mcp-Session-Id' => 'abc']));
+
+        self::assertSame(405, $response->getStatusCode());
     }
 
     public function testOnlyPostIsAccepted(): void

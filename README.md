@@ -11,8 +11,8 @@ router, its request handler and its authentication.
 - A tool call is turned into a real PSR-7 request and handed to the API's `RequestHandler`, so authentication,
   validation, serialization and problem responses work exactly as over HTTP.
 - `tools/list` only shows the tools the caller's credentials satisfy.
-- Speaks the **stateless MCP revision 2026-07-28 only**: no `initialize`, no sessions, one POST in and one JSON
-  response out.
+- Speaks the **stateless MCP revision 2026-07-28** and, on the same endpoint, the older revisions (2024-11-05 to
+  2025-11-25) **without sessions**: one POST in and one JSON response out, nothing kept between requests.
 
 ## Usage
 
@@ -52,7 +52,7 @@ $response = $server->handle($serverRequest); // McpServer is a PSR-15 RequestHan
 | `OperationInvoker`         | `invoke(OperationTool, array $arguments, ServerRequestInterface $mcpRequest): CallToolResult`. Also `buildRequest()` (→ `OperationRequest`) and `dispatch()` separately.                                                                                                               |
 | `ResponseMapper`           | `toResult(ResponseInterface): CallToolResult` — the response-to-result mapping the invoker uses.                                                                                                                                                                                       |
 | `ToolVisibility`           | `isVisible(OperationTool, ServerRequestInterface)` and `visibleTools(ToolCatalog, ServerRequestInterface)`, asking an `AuthContextProvider`.                                                                                                                                           |
-| `McpServer`                | The entry point: per request, registers the caller's visible tools with the SDK and answers through its stateless HTTP transport.                                                                                                                                                      |
+| `McpServer`                | The entry point: per request, registers the caller's visible tools with the SDK and answers through its Streamable HTTP transport, in either protocol era.                                                                                                                                    |
 | `ExposedApi`, `ServerInfo` | Configuration value objects for `McpServer`.                                                                                                                                                                                                                                           |
 
 Everything under `Schema\` and `Internal\` except `InputSchema`/`OutputSchema` is internal.
@@ -109,16 +109,21 @@ disclosed).
 
 ## Protocol and transport
 
-`McpServer` builds the SDK's modern-era dispatcher only (`Builder::buildStateless([ProtocolVersion::V2026_07_28])`)
-and serves it through `StatelessHttpTransport`. Consequences:
+`McpServer` builds a server for both protocol eras (`Builder::build()`, modern era limited to 2026-07-28) and
+serves it through `StreamableHttpTransport`, which routes each request by the revision it names. No session store
+is configured, so the SDK serves the handshake era sessionless as well. Consequences:
 
-- Requests must carry `params._meta["io.modelcontextprotocol/protocolVersion"]` and
+- **2026-07-28** requests must carry `params._meta["io.modelcontextprotocol/protocolVersion"]` and
   `params._meta["io.modelcontextprotocol/clientCapabilities"]`, plus the `MCP-Protocol-Version`, `Mcp-Method`
   and (for `tools/call`) `Mcp-Name` headers, which the SDK checks against the body.
-- `initialize`, `ping` and other methods the revision removed are refused; an older protocol version gets an
-  error naming the supported one. There are no sessions and no `Mcp-Session-Id`.
-- Only POST is accepted. Responses are JSON. The SDK would stream SSE only when a tool sends notifications
-  _and_ the client accepts `text/event-stream`; these tools send none.
+- **Handshake-era** clients (2024-11-05 to 2025-11-25) send `initialize` as usual. It is answered without an
+  `Mcp-Session-Id`, and every later request is answered on its own by the revision its `MCP-Protocol-Version`
+  header names (2025-03-26 without one, as the spec says). Requests to the client (sampling, elicitation, roots)
+  are not possible without a session; these tools make none.
+- `handshakeEra: false` serves 2026-07-28 only: `initialize` and the other methods the revision removed are
+  refused, and an older protocol version gets an error naming the supported one.
+- Only POST is accepted; `GET` and `DELETE` get `405`. Responses are JSON. The SDK would stream SSE only when a
+  tool sends notifications _and_ the client accepts `text/event-stream`; these tools send none.
 - Capabilities advertised: `tools` only.
 - `tools/list` results depend on the caller, and the SDK's default cache hint (`cacheScope: private`, `ttlMs: 0`)
   says so.
